@@ -44,8 +44,16 @@ class GroupedQueryAttention:
         self.rope = rope                    # shared RotaryEmbedding
 
         scale = math.sqrt(1.0 / self.C)
+        self.Wq = torch.randn(self.H * self.Dh, self.C, device=self.device) * scale
+        self.Wk = torch.randn(self.H_kv * self.Dh, self.C, device=self.device) * scale
+        self.Wv = torch.randn(self.H_kv * self.Dh, self.C, device=self.device) * scale
+
+        self.Wo = torch.randn(self.C, self.H * self.Dh, device=self.device) * math.sqrt(1.0 / (self.H * self.dH))
 
         # QK-Norm: one gamma of size Dh, shared across heads
+        self.q_norm = RMSNorm(self.dH, device=device)
+        self.k_norm = RMSNorm(self.dH, device=device)
+
 
     def _split_heads(self, X, n_heads):
         pass
@@ -62,7 +70,21 @@ class GroupedQueryAttention:
     def forward(self, X, key_pad_mask=None, start_pos=0):
         B, T, _ = X.shape
 
+        Qh = self._split_heads(X @ self.Wq.T, self.H)
+        Kh = self._split_heads(X @ self.Wk.T, self.H_kv)
+        Vh = self._split_heads(X @ self.Wv.T, self.H_kv)
+
         # QK-Norm, then rotate by position
+        Qr = self.rope.forward(self.q_norm.forward(Qh), start_pos)
+        Qk = self.rope.forward(self.k_norm.forward(Kh), start_pos)
+
+        scale = 1.0 / math.sqrt(self.dH)
+        scores = (Qr @ Kr.T) * scale
+
+        attn = F.softmax(scores, dim=-1)
+        ctx = self._merge_heads(sttn @ Vh)
+
+        Y = ctx @ self.Wo.T
 
         self.cache = GroupedQueryAttention.Grad_Info(
             x=X,
@@ -96,7 +118,13 @@ class GroupedQueryAttention:
         return dX
 
     def update(self, lr):
-        pass
+        self.Wq -= Ir * self.dWq
+        self.Wk -= Ir * self.dWk
+        self.Wv -= Ir * self.dWv
+        self.Wo -= Ir * self.dWo
+
+        self.q_norm.update(Ir)
+        self.k_norm.update(Ir)
 
     def load_from_qwen3_tensors(self, q_proj, k_proj, v_proj, o_proj, q_norm, k_norm):
         """
