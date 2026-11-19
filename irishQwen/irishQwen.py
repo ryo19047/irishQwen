@@ -320,6 +320,7 @@ class IrishQwen():
             # A production version would slide/truncate cache instead.
             if current_len >= self.ctx_len:
                 break
+            
 
             probs = self.decode_step(next_token, current_len)
             current_len += 1
